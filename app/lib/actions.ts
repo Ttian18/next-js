@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import postgres from 'postgres';
 import { signIn } from '@/auth';
 import { AuthError } from 'next-auth';
+import bcrypt from 'bcrypt';
 
 const sql = postgres(process.env.POSTGRES_URL!, { ssl: 'require'});
 
@@ -123,4 +124,57 @@ export async function authenticate(
       }
       throw error;
     }
+}
+
+const SignUpSchema = z.object({
+    name: z.string().min(2, { message: 'Name must be at least 2 characters.' }),
+    email: z.string().email({ message: 'Please enter a valid email.' }),
+    password: z.string().min(6, { message: 'Password must be at least 6 characters.' }),
+});
+
+export async function signup(prevState: string | undefined, formData: FormData) {
+    // Validate form using Zod
+    const validatedFields = SignUpSchema.safeParse(Object.fromEntries(formData.entries()));
+
+    // If form validation fails, return errors early. Otherwise, continue.
+    if (!validatedFields.success) {
+        const errorMessages = validatedFields.error.flatten().fieldErrors;
+        if (errorMessages.name) {
+            return errorMessages.name[0];
+        }
+        if (errorMessages.email) {
+            return errorMessages.email[0];
+        }
+        if (errorMessages.password) {
+            return errorMessages.password[0];
+        }
+        return 'Missing Fields. Failed to Sign Up.';
+    }
+
+    // Prepare data for insertion into the database
+    const { name, email, password } = validatedFields.data;
+    const hashedPassword = await bcrypt.hash(password, 10);
+
+    // Check if user already exists
+    try {
+        const user = await sql`SELECT * FROM users WHERE email = ${email}`;
+        if (user.length > 0) {
+            return 'User with this email already exists.';
+        }
+    } catch (error) {
+        return 'Database Error: Failed to check for existing user.';
+    }
+
+    // Insert data into the database
+    try {
+        await sql`
+            INSERT INTO users (name, email, password)
+            VALUES (${name}, ${email}, ${hashedPassword})
+        `;
+    } catch (error) {
+        return 'Database Error: Failed to create user.';
+    }
+
+    // Redirect the user to the login page
+    redirect('/login');
 }
